@@ -11,6 +11,8 @@ export interface RenderRequest {
   additionalImages?: string[];
   /** Optional free-text style hint from user (e.g. "golden hour, warm materials") */
   styleHint?: string;
+  /** Optional extra instructions / adjustments beyond the sketch */
+  additionalContext?: string;
   /** When true, blend all input images into a single cohesive render */
   mergeMode?: boolean;
 }
@@ -19,8 +21,9 @@ export interface RenderRequest {
  * Build a geometry-first prompt that preserves the input image's viewpoint,
  * angle, proportions, and spatial relationships.
  * The style hint is appended only if provided — default stays faithful to input.
+ * additionalContext is appended at the end for extra adjustments.
  */
-function buildPrompt(styleHint?: string, mergeMode?: boolean): string {
+function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string): string {
   const base = mergeMode
     ? [
         "architectural 3D render integrating multiple reference images,",
@@ -43,7 +46,11 @@ function buildPrompt(styleHint?: string, mergeMode?: boolean): string {
     ? `, ${styleHint.trim()}`
     : ", natural daylight, realistic materials, clean architectural photography";
 
-  return base + stylePart;
+  const contextPart = additionalContext?.trim()
+    ? `, ${additionalContext.trim()}`
+    : "";
+
+  return base + stylePart + contextPart;
 }
 
 export async function POST(req: NextRequest) {
@@ -58,7 +65,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { sketchDataUrl, additionalImages = [], styleHint, mergeMode = false } = body;
+  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false } = body;
 
   if (!sketchDataUrl) {
     return NextResponse.json({ error: "Missing sketchDataUrl" }, { status: 400 });
@@ -71,7 +78,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const fullPrompt = buildPrompt(styleHint, mergeMode);
+  const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext);
 
   try {
     // Upload primary sketch to fal storage

@@ -138,9 +138,11 @@ function DrawingCanvas({ onSketchChange }: DrawingCanvasProps) {
 interface StyleHintInputProps {
   value: string;
   onChange: (v: string) => void;
+  additionalContext: string;
+  onAdditionalContextChange: (v: string) => void;
 }
 
-function StyleHintInput({ value, onChange }: StyleHintInputProps) {
+function StyleHintInput({ value, onChange, additionalContext, onAdditionalContextChange }: StyleHintInputProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -157,36 +159,56 @@ function StyleHintInput({ value, onChange }: StyleHintInputProps) {
   }, []);
 
   return (
-    <div ref={ref} className="relative">
-      <label className="text-xs text-white/40 uppercase tracking-widest font-semibold block mb-2">
-        Style hint <span className="normal-case text-white/20 font-normal">(optional)</span>
-      </label>
-      <div className="relative flex items-center">
-        <span className="absolute left-3 text-white/20 text-sm">✨</span>
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-          onFocus={() => setOpen(true)}
-          placeholder="e.g. golden hour, warm materials, night view..."
-          className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-indigo-500/50 focus:bg-white/8 transition-all"
-        />
-        {value && (
-          <button onClick={() => { onChange(''); setOpen(false); }}
-            className="absolute right-3 text-white/20 hover:text-white/50 transition-colors text-xs">✕</button>
+    <div className="space-y-4">
+      {/* Style hint */}
+      <div ref={ref} className="relative">
+        <label className="text-xs text-white/40 uppercase tracking-widest font-semibold block mb-2">
+          Style hint <span className="normal-case text-white/20 font-normal">(optional)</span>
+        </label>
+        <div className="relative flex items-center">
+          <span className="absolute left-3 text-white/20 text-sm">✨</span>
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            placeholder="e.g. golden hour, warm materials, night view..."
+            className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-indigo-500/50 focus:bg-white/8 transition-all"
+          />
+          {value && (
+            <button onClick={() => { onChange(''); setOpen(false); }}
+              className="absolute right-3 text-white/20 hover:text-white/50 transition-colors text-xs">✕</button>
+          )}
+        </div>
+        {open && filtered.length > 0 && (
+          <div className="absolute z-50 mt-1 w-full glass rounded-xl border border-white/10 shadow-xl overflow-hidden">
+            {filtered.slice(0, 6).map((s) => (
+              <button key={s} onMouseDown={(e) => { e.preventDefault(); onChange(s); setOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm text-white/60 hover:bg-white/10 hover:text-white/90 transition-colors border-b border-white/5 last:border-0 flex items-center gap-2">
+                <span className="text-white/20">↩</span>
+                <span className="truncate">{s}</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full glass rounded-xl border border-white/10 shadow-xl overflow-hidden">
-          {filtered.slice(0, 6).map((s) => (
-            <button key={s} onMouseDown={(e) => { e.preventDefault(); onChange(s); setOpen(false); }}
-              className="w-full text-left px-4 py-2.5 text-sm text-white/60 hover:bg-white/10 hover:text-white/90 transition-colors border-b border-white/5 last:border-0 flex items-center gap-2">
-              <span className="text-white/20">↩</span>
-              <span className="truncate">{s}</span>
-            </button>
-          ))}
-        </div>
-      )}
+
+      {/* Additional context / adjustments */}
+      <div>
+        <label className="text-xs text-white/40 uppercase tracking-widest font-semibold block mb-2">
+          Additional context <span className="normal-case text-white/20 font-normal">(optional)</span>
+        </label>
+        <textarea
+          value={additionalContext}
+          onChange={(e) => onAdditionalContextChange(e.target.value)}
+          placeholder="e.g. add a swimming pool on the right side, remove the garage, make it a 2-story building..."
+          rows={2}
+          className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-indigo-500/50 focus:bg-white/8 transition-all resize-none leading-relaxed"
+        />
+        <p className="text-[10px] text-white/20 mt-1.5">
+          Describe adjustments or extra details to guide the render beyond what the sketch shows.
+        </p>
+      </div>
     </div>
   );
 }
@@ -268,6 +290,7 @@ export default function SketchToRender() {
   const [sketchDataUrl, setSketchDataUrl] = useState<string | null>(null);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [styleHint, setStyleHint] = useState('');
+  const [additionalContext, setAdditionalContext] = useState('');
   const [loading, setLoading] = useState(false);
   const [mergeLoading, setMergeLoading] = useState(false);
   const [results, setResults] = useState<RenderResult[]>([]);
@@ -282,11 +305,11 @@ export default function SketchToRender() {
 
   // ── Single render (draw mode or single upload) ──
 
-  const renderSingle = async (dataUrl: string, hint: string, sourceIndex?: number): Promise<RenderResult | null> => {
+  const renderSingle = async (dataUrl: string, hint: string, context: string, sourceIndex?: number): Promise<RenderResult | null> => {
     const res = await fetch('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sketchDataUrl: dataUrl, styleHint: hint.trim() }),
+      body: JSON.stringify({ sketchDataUrl: dataUrl, styleHint: hint.trim(), additionalContext: context.trim() }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -306,17 +329,17 @@ export default function SketchToRender() {
 
     try {
       if (inputMode === 'draw') {
-        const r = await renderSingle(sketchDataUrl!, styleHint);
+        const r = await renderSingle(sketchDataUrl!, styleHint, additionalContext);
         if (r) { setResults([r]); setActiveResult(r); }
       } else if (uploadedImages.length === 1) {
-        const r = await renderSingle(uploadedImages[0], styleHint, 0);
+        const r = await renderSingle(uploadedImages[0], styleHint, additionalContext, 0);
         if (r) { setResults([r]); setActiveResult(r); }
       } else {
         // Multi-image: render one by one
         const newResults: RenderResult[] = [];
         for (let i = 0; i < uploadedImages.length; i++) {
           setProgress(i);
-          const r = await renderSingle(uploadedImages[i], styleHint, i);
+          const r = await renderSingle(uploadedImages[i], styleHint, additionalContext, i);
           if (r) {
             newResults.push(r);
             setResults([...newResults]);
@@ -347,6 +370,7 @@ export default function SketchToRender() {
           sketchDataUrl: uploadedImages[0],
           additionalImages: uploadedImages.slice(1),
           styleHint: styleHint.trim(),
+          additionalContext: additionalContext.trim(),
           mergeMode: true,
         }),
       });
@@ -408,12 +432,33 @@ export default function SketchToRender() {
             )}
           </div>
 
-          {/* Style hint */}
+          {/* Style hint + additional context */}
           <div className="glass rounded-2xl p-4">
-            <StyleHintInput value={styleHint} onChange={setStyleHint} />
+            <StyleHintInput
+              value={styleHint}
+              onChange={setStyleHint}
+              additionalContext={additionalContext}
+              onAdditionalContextChange={setAdditionalContext}
+            />
             <p className="text-[10px] text-white/20 mt-2">
-              Leave empty to auto-follow the input image geometry, angle, and details.
+              Leave style empty to auto-follow the input image geometry, angle, and details.
             </p>
+          </div>
+
+          {/* High quality model — coming soon */}
+          <div className="glass rounded-2xl p-4 opacity-60 cursor-not-allowed select-none">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-base">⚡</div>
+                <div>
+                  <p className="text-sm font-semibold text-white/70">High Quality Model</p>
+                  <p className="text-xs text-white/30">Flux Pro · higher resolution · slower</p>
+                </div>
+              </div>
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-amber-400/70 border border-amber-400/30 rounded-full px-2.5 py-1">
+                Em breve
+              </span>
+            </div>
           </div>
 
           {/* Generate button */}
