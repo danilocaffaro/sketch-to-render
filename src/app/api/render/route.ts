@@ -5,24 +5,46 @@ import { fal } from "@fal-ai/client";
 fal.config({ credentials: process.env.FAL_KEY });
 
 export interface RenderRequest {
-  /** Base64 data URL of the sketch image */
+  /** Base64 data URL of the primary sketch/image */
   sketchDataUrl: string;
-  /** Architectural style prompt */
-  prompt: string;
-  /** Render style preset */
-  style: "photorealistic" | "watercolor" | "sketch_enhanced" | "cinematic";
+  /** Optional additional images (for merge mode) */
+  additionalImages?: string[];
+  /** Optional free-text style hint from user (e.g. "golden hour, warm materials") */
+  styleHint?: string;
+  /** When true, blend all input images into a single cohesive render */
+  mergeMode?: boolean;
 }
 
-const STYLE_SUFFIX: Record<RenderRequest["style"], string> = {
-  photorealistic:
-    "photorealistic architectural render, 4K, dramatic lighting, detailed materials, glass, concrete, wood, professional photography",
-  watercolor:
-    "architectural watercolor illustration, soft washes, artistic, professional presentation drawing",
-  sketch_enhanced:
-    "architectural pencil sketch, detailed linework, professional hand-drawn illustration, technical drawing",
-  cinematic:
-    "cinematic architectural visualization, golden hour lighting, dramatic shadows, film photography, 35mm",
-};
+/**
+ * Build a geometry-first prompt that preserves the input image's viewpoint,
+ * angle, proportions, and spatial relationships.
+ * The style hint is appended only if provided — default stays faithful to input.
+ */
+function buildPrompt(styleHint?: string, mergeMode?: boolean): string {
+  const base = mergeMode
+    ? [
+        "architectural 3D render integrating multiple reference images,",
+        "preserving consistent viewpoint and spatial layout,",
+        "seamless composition blending all input geometries,",
+        "same perspective angle as reference images,",
+        "faithful proportions and structural details,",
+        "professional architectural visualization,",
+      ].join(" ")
+    : [
+        "photorealistic architectural 3D render,",
+        "exact same viewpoint and camera angle as the input image,",
+        "faithful to the input geometry and spatial proportions,",
+        "preserving all structural details walls windows doors rooflines,",
+        "matching perspective and depth as shown in sketch,",
+        "professional architectural visualization, ultra-detailed, 4K,",
+      ].join(" ");
+
+  const stylePart = styleHint?.trim()
+    ? `, ${styleHint.trim()}`
+    : ", natural daylight, realistic materials, clean architectural photography";
+
+  return base + stylePart;
+}
 
 export async function POST(req: NextRequest) {
   if (!process.env.FAL_KEY) {
@@ -36,22 +58,58 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { sketchDataUrl, prompt, style = "photorealistic" } = body;
+  const { sketchDataUrl, additionalImages = [], styleHint, mergeMode = false } = body;
 
-  if (!sketchDataUrl || !prompt) {
-    return NextResponse.json({ error: "Missing sketchDataUrl or prompt" }, { status: 400 });
+  if (!sketchDataUrl) {
+    return NextResponse.json({ error: "Missing sketchDataUrl" }, { status: 400 });
   }
 
   if (!sketchDataUrl.startsWith("data:image/")) {
-    return NextResponse.json({ error: "sketchDataUrl must be a data: image URL" }, { status: 400 });
+    return NextResponse.json(
+      { error: "sketchDataUrl must be a data: image URL" },
+      { status: 400 }
+    );
   }
 
-  const fullPrompt = `${prompt}, ${STYLE_SUFFIX[style] ?? STYLE_SUFFIX.photorealistic}`;
+  const fullPrompt = buildPrompt(styleHint, mergeMode);
 
   try {
-    // Upload sketch to fal storage first (required for ControlNet input)
+    // Upload primary sketch to fal storage
     const sketchBlob = await dataUrlToBlob(sketchDataUrl);
     const uploadedUrl = await fal.storage.upload(sketchBlob);
+
+    // For merge mode, upload additional images too
+    const additionalUrls: string[] = [];
+    if (mergeMode && additionalImages.length > 0) {
+      for (const img of additionalImages.slice(0, 3)) {
+        // limit to 3 extra for perf
+        if (img.startsWith("data:image/")) {
+          const blob = await dataUrlToBlob(img);
+          additionalUrls.push(await fal.storage.upload(blob));
+        }
+      }
+    }
+
+    // ControlNet conditioning scale slightly higher for merge (needs to integrate multiple sources)
+    const conditioningScale = mergeMode ? 0.75 : 0.70;
+
+    const controls: Array<{
+      control_image_url: string;
+      control_mode: "canny";
+      conditioning_scale: number;
+    }> = [
+      {
+        control_image_url: uploadedUrl,
+        control_mode: "canny",
+        conditioning_scale: conditioningScale,
+      },
+      // In merge mode, add extra images as additional canny controls with lower weight
+      ...additionalUrls.map((url) => ({
+        control_image_url: url,
+        control_mode: "canny" as const,
+        conditioning_scale: 0.30,
+      })),
+    ];
 
     const input = {
       prompt: fullPrompt,
@@ -60,18 +118,10 @@ export async function POST(req: NextRequest) {
       guidance_scale: 3.5,
       num_images: 1,
       enable_safety_checker: true,
-      // ControlNet Union: "canny" mode detects edges from the sketch lines
-      // preserving the architectural geometry while rendering photorealistically
       controlnet_unions: [
         {
           path: "alimama-creative/FLUX.1-dev-Controlnet-Union-Pro",
-          controls: [
-            {
-              control_image_url: uploadedUrl,
-              control_mode: "canny" as const,
-              conditioning_scale: 0.65,
-            },
-          ],
+          controls,
         },
       ],
     };
@@ -80,7 +130,10 @@ export async function POST(req: NextRequest) {
 
     const images = result.data?.images;
     if (!images || images.length === 0) {
-      return NextResponse.json({ error: "No images returned from fal.ai" }, { status: 502 });
+      return NextResponse.json(
+        { error: "No images returned from fal.ai" },
+        { status: 502 }
+      );
     }
 
     return NextResponse.json({
