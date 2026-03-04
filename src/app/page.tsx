@@ -314,10 +314,17 @@ function MultiUpload({ images, onAdd, onRemove, floorPlanMode = false }: MultiUp
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (file: File) => {
-    if (!file.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = (e) => onAdd(e.target?.result as string);
-    reader.readAsDataURL(file);
+    // Accept image/* and also HEIC/HEIF (iOS sometimes reports empty type)
+    const isImage = file.type.startsWith('image/') || /\.(heic|heif|jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(file.name);
+    if (!isImage) return;
+    try {
+      const reader = new FileReader();
+      reader.onload = (e) => onAdd(e.target?.result as string);
+      reader.onerror = () => console.error('Failed to read file:', file.name);
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('File read error:', err);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -794,8 +801,9 @@ export default function SketchToRender() {
                         ? 'border-indigo-500/60 ring-1 ring-indigo-500/40'
                         : 'border-white/10 hover:border-white/30'
                     }`}>
-                    <Image src={r.url} alt={`Render ${i + 1}`} width={400} height={250}
-                      className="w-full h-full object-cover" unoptimized={r.url.startsWith('data:')} />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={r.url} alt={`Render ${i + 1}`}
+                      className="w-full h-full object-cover" />
                     <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5">
                       {r.perspectiveAngle ? (PERSPECTIVE_LABELS[r.perspectiveAngle] ?? r.perspectiveAngle) : `#${(r.sourceIndex ?? i) + 1}`}
                     </div>
@@ -808,8 +816,9 @@ export default function SketchToRender() {
                         ? 'border-violet-500/60 ring-1 ring-violet-500/40'
                         : 'border-white/10 hover:border-white/30'
                     }`}>
-                    <Image src={mergeResult.url} alt="Merged render" width={400} height={250}
-                      className="w-full h-full object-cover" unoptimized={mergeResult.url.startsWith('data:')} />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={mergeResult.url} alt="Merged render"
+                      className="w-full h-full object-cover" />
                     <div className="absolute bottom-1 right-1 bg-violet-600/80 text-white text-[10px] rounded px-1.5 py-0.5 font-medium">
                       🔀 merge
                     </div>
