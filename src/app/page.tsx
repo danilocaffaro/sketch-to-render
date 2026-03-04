@@ -10,9 +10,17 @@ interface RenderResult {
   prompt: string;
   requestId: string;
   sourceIndex?: number; // which input image originated this result
+  perspectiveAngle?: string | null; // for multi-perspective mode
 }
 
-// ─── Before/After Slider ──────────────────────────────────────────────────────
+// ─── Perspective angle labels ─────────────────────────────────────────────────
+
+const PERSPECTIVE_LABELS: Record<string, string> = {
+  front: '⬜ Front',
+  perspective: '◱ 3/4',
+  aerial: '🦅 Aerial',
+};
+
 
 interface BeforeAfterSliderProps {
   beforeSrc: string; // sketch / input
@@ -379,6 +387,7 @@ export default function SketchToRender() {
   const [additionalContext, setAdditionalContext] = useState('');
   const [loading, setLoading] = useState(false);
   const [mergeLoading, setMergeLoading] = useState(false);
+  const [multiPerspLoading, setMultiPerspLoading] = useState(false);
   const [results, setResults] = useState<RenderResult[]>([]);
   const [mergeResult, setMergeResult] = useState<RenderResult | null>(null);
   const [activeResult, setActiveResult] = useState<RenderResult | null>(null);
@@ -389,15 +398,22 @@ export default function SketchToRender() {
   const hasInput = inputMode === 'draw' ? !!sketchDataUrl : uploadedImages.length > 0;
   const isMulti = inputMode === 'upload' && uploadedImages.length > 1;
   const isFloorPlan = inputMode === 'floorplan';
-  const canRender = hasInput && !loading && !mergeLoading;
+  const canRender = hasInput && !loading && !mergeLoading && !multiPerspLoading;
 
   // ── Single render (draw mode or single upload) ──
 
-  const renderSingle = async (dataUrl: string, hint: string, context: string, sourceIndex?: number): Promise<RenderResult | null> => {
+  const renderSingle = async (dataUrl: string, hint: string, context: string, sourceIndex?: number, perspectiveAngle?: string, seed?: number): Promise<RenderResult | null> => {
     const res = await fetch('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sketchDataUrl: dataUrl, styleHint: hint.trim(), additionalContext: context.trim(), floorPlanMode: isFloorPlan }),
+      body: JSON.stringify({
+        sketchDataUrl: dataUrl,
+        styleHint: hint.trim(),
+        additionalContext: context.trim(),
+        floorPlanMode: isFloorPlan,
+        ...(perspectiveAngle && { perspectiveAngle }),
+        ...(seed !== undefined && { seed }),
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -472,6 +488,42 @@ export default function SketchToRender() {
       setError(err instanceof Error ? err.message : 'Merge render failed');
     } finally {
       setMergeLoading(false);
+    }
+  };
+
+  // ── Multi-perspective: generate 3 angles from same sketch ──
+  const handleMultiPerspective = async () => {
+    const sourceImg = inputMode === 'draw' ? sketchDataUrl : uploadedImages[0];
+    if (!sourceImg || multiPerspLoading) return;
+
+    setMultiPerspLoading(true);
+    setError('');
+    setResults([]);
+    setMergeResult(null);
+    setActiveResult(null);
+    setProgress(0);
+    setShowComparison(false);
+
+    try {
+      // Fixed seed for visual consistency across angles
+      const seed = Math.floor(Math.random() * 2147483647);
+      const angles = ['front', 'perspective', 'aerial'] as const;
+      const newResults: RenderResult[] = [];
+
+      for (let i = 0; i < angles.length; i++) {
+        setProgress(i);
+        const r = await renderSingle(sourceImg, styleHint, additionalContext, i, angles[i], seed);
+        if (r) {
+          newResults.push(r);
+          setResults([...newResults]);
+          if (i === 0) setActiveResult(r);
+        }
+      }
+      setProgress(angles.length);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Multi-perspective render failed');
+    } finally {
+      setMultiPerspLoading(false);
     }
   };
 
@@ -589,6 +641,29 @@ export default function SketchToRender() {
             )}
           </button>
 
+          {/* Multi-perspective button — available in draw + single upload */}
+          {!isMulti && hasInput && (
+            <button onClick={handleMultiPerspective}
+              disabled={multiPerspLoading || loading || mergeLoading}
+              className={`w-full py-3 rounded-2xl font-semibold text-sm transition-all border ${
+                !multiPerspLoading && !loading && !mergeLoading
+                  ? 'border-amber-500/50 text-amber-300 hover:bg-amber-500/10 active:scale-[0.98]'
+                  : 'border-white/10 text-white/20 cursor-not-allowed'
+              }`}>
+              {multiPerspLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z"/>
+                  </svg>
+                  {progress < 3 ? `Generating angle ${progress + 1}/3...` : 'Finishing...'}
+                </span>
+              ) : (
+                <>🔭 3 perspectives — Front · 3/4 · Aerial</>
+              )}
+            </button>
+          )}
+
           {/* Merge button (multi only) */}
           {isMulti && (
             <button onClick={handleMerge}
@@ -675,7 +750,12 @@ export default function SketchToRender() {
                   <div className="relative rounded-xl overflow-hidden flex-1">
                     <Image src={activeResult.url} alt="AI Render" width={1280} height={800}
                       className="w-full h-full object-cover rounded-xl" unoptimized priority />
-                    {activeResult.sourceIndex !== undefined && activeResult.sourceIndex >= 0 && (
+                    {activeResult.perspectiveAngle && (
+                      <div className="absolute top-2 left-2 bg-amber-600/80 text-white text-xs rounded-lg px-2 py-1 font-medium">
+                        {PERSPECTIVE_LABELS[activeResult.perspectiveAngle] ?? activeResult.perspectiveAngle}
+                      </div>
+                    )}
+                    {!activeResult.perspectiveAngle && activeResult.sourceIndex !== undefined && activeResult.sourceIndex >= 0 && (
                       <div className="absolute top-2 left-2 bg-black/60 text-white text-xs rounded-lg px-2 py-1">
                         Image #{activeResult.sourceIndex + 1}
                       </div>
@@ -716,7 +796,7 @@ export default function SketchToRender() {
                     <Image src={r.url} alt={`Render ${i + 1}`} width={400} height={250}
                       className="w-full h-full object-cover" unoptimized />
                     <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5">
-                      #{(r.sourceIndex ?? i) + 1}
+                      {r.perspectiveAngle ? (PERSPECTIVE_LABELS[r.perspectiveAngle] ?? r.perspectiveAngle) : `#${(r.sourceIndex ?? i) + 1}`}
                     </div>
                   </button>
                 ))}
