@@ -15,6 +15,8 @@ export interface RenderRequest {
   additionalContext?: string;
   /** When true, blend all input images into a single cohesive render */
   mergeMode?: boolean;
+  /** When true, use floor plan humanization mode (top-down, furnished, people) */
+  floorPlanMode?: boolean;
 }
 
 /**
@@ -23,28 +25,43 @@ export interface RenderRequest {
  * The style hint is appended only if provided — default stays faithful to input.
  * additionalContext is appended at the end for extra adjustments.
  */
-function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string): string {
-  const base = mergeMode
-    ? [
-        "architectural 3D render integrating multiple reference images,",
-        "preserving consistent viewpoint and spatial layout,",
-        "seamless composition blending all input geometries,",
-        "same perspective angle as reference images,",
-        "faithful proportions and structural details,",
-        "professional architectural visualization,",
-      ].join(" ")
-    : [
-        "photorealistic architectural 3D render,",
-        "exact same viewpoint and camera angle as the input image,",
-        "faithful to the input geometry and spatial proportions,",
-        "preserving all structural details walls windows doors rooflines,",
-        "matching perspective and depth as shown in sketch,",
-        "professional architectural visualization, ultra-detailed, 4K,",
-      ].join(" ");
+function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string, floorPlanMode?: boolean): string {
+  let base: string;
+
+  if (floorPlanMode) {
+    base = [
+      "humanized architectural floor plan render, top-down bird's eye view,",
+      "fully furnished with realistic furniture, rugs, plants, and decor,",
+      "people silhouettes for scale, natural warm interior lighting,",
+      "polished wood floors, contemporary interior design,",
+      "photorealistic overhead view, high detail finishes,",
+      "professional real estate marketing visualization,",
+    ].join(" ");
+  } else if (mergeMode) {
+    base = [
+      "architectural 3D render integrating multiple reference images,",
+      "preserving consistent viewpoint and spatial layout,",
+      "seamless composition blending all input geometries,",
+      "same perspective angle as reference images,",
+      "faithful proportions and structural details,",
+      "professional architectural visualization,",
+    ].join(" ");
+  } else {
+    base = [
+      "photorealistic architectural 3D render,",
+      "exact same viewpoint and camera angle as the input image,",
+      "faithful to the input geometry and spatial proportions,",
+      "preserving all structural details walls windows doors rooflines,",
+      "matching perspective and depth as shown in sketch,",
+      "professional architectural visualization, ultra-detailed, 4K,",
+    ].join(" ");
+  }
 
   const stylePart = styleHint?.trim()
     ? `, ${styleHint.trim()}`
-    : ", natural daylight, realistic materials, clean architectural photography";
+    : floorPlanMode
+      ? ", bright airy atmosphere, Scandinavian minimal style, soft shadows"
+      : ", natural daylight, realistic materials, clean architectural photography";
 
   const contextPart = additionalContext?.trim()
     ? `, ${additionalContext.trim()}`
@@ -65,7 +82,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false } = body;
+  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false, floorPlanMode = false } = body;
 
   if (!sketchDataUrl) {
     return NextResponse.json({ error: "Missing sketchDataUrl" }, { status: 400 });
@@ -78,7 +95,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext);
+  const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext, floorPlanMode);
 
   try {
     // Upload primary sketch to fal storage
@@ -97,8 +114,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ControlNet conditioning scale slightly higher for merge (needs to integrate multiple sources)
-    const conditioningScale = mergeMode ? 0.75 : 0.70;
+    // ControlNet conditioning scale:
+    // - floor plan: 0.55 (more creative freedom for humanization)
+    // - merge: 0.75 (needs to integrate multiple sources)
+    // - default: 0.70 (geometry-faithful)
+    const conditioningScale = floorPlanMode ? 0.55 : mergeMode ? 0.75 : 0.70;
 
     const controls: Array<{
       control_image_url: string;
@@ -120,9 +140,10 @@ export async function POST(req: NextRequest) {
 
     const input = {
       prompt: fullPrompt,
-      image_size: "landscape_16_9" as const,
+      // floor plan: square_hd (plans are typically square); default: landscape_16_9
+      image_size: floorPlanMode ? ("square_hd" as const) : ("landscape_16_9" as const),
       num_inference_steps: 28,
-      guidance_scale: 3.5,
+      guidance_scale: floorPlanMode ? 4.5 : 3.5, // higher guidance for floor plan detail
       num_images: 1,
       enable_safety_checker: true,
       controlnet_unions: [
