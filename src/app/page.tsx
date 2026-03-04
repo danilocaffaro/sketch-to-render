@@ -298,9 +298,10 @@ interface MultiUploadProps {
   images: string[];
   onAdd: (dataUrl: string) => void;
   onRemove: (index: number) => void;
+  floorPlanMode?: boolean;
 }
 
-function MultiUpload({ images, onAdd, onRemove }: MultiUploadProps) {
+function MultiUpload({ images, onAdd, onRemove, floorPlanMode = false }: MultiUploadProps) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -350,13 +351,19 @@ function MultiUpload({ images, onAdd, onRemove }: MultiUploadProps) {
       >
         <input ref={inputRef} type="file" accept="image/*" multiple className="hidden"
           onChange={(e) => Array.from(e.target.files ?? []).forEach(handleFile)} />
-        <p className="text-2xl mb-1">{images.length > 0 ? '➕' : '📎'}</p>
+        <p className="text-2xl mb-1">{images.length > 0 ? '➕' : floorPlanMode ? '📐' : '📎'}</p>
         <p className="text-sm text-white/60">
           {images.length > 0
-            ? <><span className="text-indigo-400">Add more images</span> or drop here</>
-            : <>Drop sketch images here or <span className="text-indigo-400">browse</span></>}
+            ? <><span className="text-indigo-400">Add more {floorPlanMode ? 'floor plans' : 'images'}</span> or drop here</>
+            : floorPlanMode
+              ? <>Drop your <span className="text-indigo-400">floor plan</span> here or <span className="text-indigo-400">browse</span></>
+              : <>Drop sketch images here or <span className="text-indigo-400">browse</span></>}
         </p>
-        <p className="text-xs text-white/30 mt-1">JPG, PNG, WebP — supports multiple images</p>
+        <p className="text-xs text-white/30 mt-1">
+          {floorPlanMode
+            ? 'JPG, PNG, WebP — top-down floor plan sketch or image'
+            : 'JPG, PNG, WebP — supports multiple images'}
+        </p>
       </div>
     </div>
   );
@@ -365,7 +372,7 @@ function MultiUpload({ images, onAdd, onRemove }: MultiUploadProps) {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function SketchToRender() {
-  const [inputMode, setInputMode] = useState<'draw' | 'upload'>('draw');
+  const [inputMode, setInputMode] = useState<'draw' | 'upload' | 'floorplan'>('draw');
   const [sketchDataUrl, setSketchDataUrl] = useState<string | null>(null);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [styleHint, setStyleHint] = useState('');
@@ -381,6 +388,7 @@ export default function SketchToRender() {
 
   const hasInput = inputMode === 'draw' ? !!sketchDataUrl : uploadedImages.length > 0;
   const isMulti = inputMode === 'upload' && uploadedImages.length > 1;
+  const isFloorPlan = inputMode === 'floorplan';
   const canRender = hasInput && !loading && !mergeLoading;
 
   // ── Single render (draw mode or single upload) ──
@@ -389,7 +397,7 @@ export default function SketchToRender() {
     const res = await fetch('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sketchDataUrl: dataUrl, styleHint: hint.trim(), additionalContext: context.trim() }),
+      body: JSON.stringify({ sketchDataUrl: dataUrl, styleHint: hint.trim(), additionalContext: context.trim(), floorPlanMode: isFloorPlan }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -494,12 +502,16 @@ export default function SketchToRender() {
         <div className="space-y-6">
           {/* Mode toggle */}
           <div className="glass rounded-2xl p-1 flex gap-1">
-            {(['draw', 'upload'] as const).map(mode => (
-              <button key={mode} onClick={() => setInputMode(mode)}
-                className={`flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all ${
-                  inputMode === mode ? 'bg-indigo-600 text-white' : 'text-white/40 hover:text-white/70'
+            {([
+              { id: 'draw', label: '✏️ Draw' },
+              { id: 'upload', label: '📎 Upload' },
+              { id: 'floorplan', label: '📐 Floor Plan' },
+            ] as const).map(({ id, label }) => (
+              <button key={id} onClick={() => setInputMode(id)}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-medium transition-all ${
+                  inputMode === id ? 'bg-indigo-600 text-white' : 'text-white/40 hover:text-white/70'
                 }`}>
-                {mode === 'draw' ? '✏️ Draw' : '📎 Upload'}
+                {label}
               </button>
             ))}
           </div>
@@ -508,6 +520,8 @@ export default function SketchToRender() {
           <div className="glass rounded-2xl p-4">
             {inputMode === 'draw' ? (
               <DrawingCanvas onSketchChange={setSketchDataUrl} />
+            ) : inputMode === 'floorplan' ? (
+              <MultiUpload images={uploadedImages} onAdd={addImage} onRemove={removeImage} floorPlanMode />
             ) : (
               <MultiUpload images={uploadedImages} onAdd={addImage} onRemove={removeImage} />
             )}
@@ -515,6 +529,15 @@ export default function SketchToRender() {
 
           {/* Style hint + additional context */}
           <div className="glass rounded-2xl p-4">
+            {isFloorPlan && (
+              <div className="flex items-start gap-2 mb-4 p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                <span className="text-base flex-shrink-0">📐</span>
+                <div>
+                  <p className="text-xs font-semibold text-indigo-300">Floor Plan Mode</p>
+                  <p className="text-[11px] text-white/40 mt-0.5">AI will generate a top-down humanized view — fully furnished with people, plants, and natural lighting. Works best with clean floor plan sketches or blueprints.</p>
+                </div>
+              </div>
+            )}
             <StyleHintInput
               value={styleHint}
               onChange={setStyleHint}
@@ -522,7 +545,9 @@ export default function SketchToRender() {
               onAdditionalContextChange={setAdditionalContext}
             />
             <p className="text-[10px] text-white/20 mt-2">
-              Leave style empty to auto-follow the input image geometry, angle, and details.
+              {isFloorPlan
+                ? 'Leave style empty for Scandinavian minimal default. Try "luxury contemporary" or "warm Brazilian style".'
+                : 'Leave style empty to auto-follow the input image geometry, angle, and details.'}
             </p>
           </div>
 
