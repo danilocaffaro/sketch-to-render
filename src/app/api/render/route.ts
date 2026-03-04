@@ -127,6 +127,10 @@ export async function POST(req: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: "gemini-2.0-flash-exp-image-generation",
+      generationConfig: {
+        // @ts-expect-error — responseModalities is supported but not yet in the SDK types
+        responseModalities: ["TEXT", "IMAGE"],
+      },
     });
 
     // Build parts array: prompt + sketch + optional extra images
