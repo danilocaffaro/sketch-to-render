@@ -4,6 +4,16 @@ import { fal } from "@fal-ai/client";
 // Server-side only — FAL_KEY never exposed to client
 fal.config({ credentials: process.env.FAL_KEY });
 
+// ─── Perspective angles for multi-perspective mode ────────────────────────────
+
+export const PERSPECTIVE_ANGLES = [
+  { id: "front", label: "Front View", suffix: "straight-on frontal elevation view, symmetrical composition" },
+  { id: "perspective", label: "3/4 View", suffix: "three-quarter perspective view, slight angle, dynamic composition" },
+  { id: "aerial", label: "Aerial View", suffix: "aerial bird's eye perspective, elevated viewpoint, 45-degree angle" },
+] as const;
+
+export type PerspectiveAngleId = typeof PERSPECTIVE_ANGLES[number]["id"];
+
 export interface RenderRequest {
   /** Base64 data URL of the primary sketch/image */
   sketchDataUrl: string;
@@ -17,6 +27,10 @@ export interface RenderRequest {
   mergeMode?: boolean;
   /** When true, use floor plan humanization mode (top-down, furnished, people) */
   floorPlanMode?: boolean;
+  /** When set, override the viewpoint angle for multi-perspective mode */
+  perspectiveAngle?: PerspectiveAngleId;
+  /** Optional seed for reproducibility (used in multi-perspective to keep style consistent) */
+  seed?: number;
 }
 
 /**
@@ -25,7 +39,7 @@ export interface RenderRequest {
  * The style hint is appended only if provided — default stays faithful to input.
  * additionalContext is appended at the end for extra adjustments.
  */
-function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string, floorPlanMode?: boolean): string {
+function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string, floorPlanMode?: boolean, perspectiveAngle?: PerspectiveAngleId): string {
   let base: string;
 
   if (floorPlanMode) {
@@ -47,14 +61,18 @@ function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?
       "professional architectural visualization,",
     ].join(" ");
   } else {
+    const angleSuffix = perspectiveAngle
+      ? PERSPECTIVE_ANGLES.find(a => a.id === perspectiveAngle)?.suffix ?? ""
+      : "";
+
     base = [
       "photorealistic architectural 3D render,",
-      "exact same viewpoint and camera angle as the input image,",
+      angleSuffix || "exact same viewpoint and camera angle as the input image,",
       "faithful to the input geometry and spatial proportions,",
       "preserving all structural details walls windows doors rooflines,",
-      "matching perspective and depth as shown in sketch,",
+      perspectiveAngle ? "" : "matching perspective and depth as shown in sketch,",
       "professional architectural visualization, ultra-detailed, 4K,",
-    ].join(" ");
+    ].filter(Boolean).join(" ");
   }
 
   const stylePart = styleHint?.trim()
@@ -82,7 +100,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false, floorPlanMode = false } = body;
+  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false, floorPlanMode = false, perspectiveAngle, seed } = body;
 
   if (!sketchDataUrl) {
     return NextResponse.json({ error: "Missing sketchDataUrl" }, { status: 400 });
@@ -95,7 +113,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext, floorPlanMode);
+  const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext, floorPlanMode, perspectiveAngle);
 
   try {
     // Upload primary sketch to fal storage
@@ -146,6 +164,8 @@ export async function POST(req: NextRequest) {
       guidance_scale: floorPlanMode ? 4.5 : 3.5, // higher guidance for floor plan detail
       num_images: 1,
       enable_safety_checker: true,
+      // seed: fixes style/palette consistency across multi-perspective renders
+      ...(seed !== undefined && { seed }),
       controlnet_unions: [
         {
           path: "alimama-creative/FLUX.1-dev-Controlnet-Union-Pro",
@@ -168,6 +188,8 @@ export async function POST(req: NextRequest) {
       url: images[0].url,
       prompt: fullPrompt,
       requestId: result.requestId,
+      perspectiveAngle: perspectiveAngle ?? null,
+      seed: seed ?? null,
     });
   } catch (err: unknown) {
     console.error("[render] fal.ai error:", err);
