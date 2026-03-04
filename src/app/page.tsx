@@ -12,7 +12,86 @@ interface RenderResult {
   sourceIndex?: number; // which input image originated this result
 }
 
-// ─── Style suggestions (autocomplete) ────────────────────────────────────────
+// ─── Before/After Slider ──────────────────────────────────────────────────────
+
+interface BeforeAfterSliderProps {
+  beforeSrc: string; // sketch / input
+  afterSrc: string;  // render / output
+}
+
+function BeforeAfterSlider({ beforeSrc, afterSrc }: BeforeAfterSliderProps) {
+  const [position, setPosition] = useState(50); // 0..100
+  const [dragging, setDragging] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = (clientX: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    setPosition((x / rect.width) * 100);
+  };
+
+  const onMouseDown = (e: React.MouseEvent) => { e.preventDefault(); setDragging(true); updatePosition(e.clientX); };
+  const onMouseMove = (e: React.MouseEvent) => { if (dragging) updatePosition(e.clientX); };
+  const onMouseUp = () => setDragging(false);
+  const onTouchStart = (e: React.TouchEvent) => { setDragging(true); updatePosition(e.touches[0].clientX); };
+  const onTouchMove = (e: React.TouchEvent) => { if (dragging) { e.preventDefault(); updatePosition(e.touches[0].clientX); } };
+  const onTouchEnd = () => setDragging(false);
+
+  useEffect(() => {
+    const up = () => setDragging(false);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchend', up);
+    return () => { window.removeEventListener('mouseup', up); window.removeEventListener('touchend', up); };
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full aspect-video rounded-xl overflow-hidden select-none cursor-col-resize"
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+    >
+      {/* After (render) — full width background */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={afterSrc} alt="AI Render" className="absolute inset-0 w-full h-full object-cover" draggable={false} />
+
+      {/* Before (sketch) — clipped to left side */}
+      <div className="absolute inset-0 overflow-hidden" style={{ width: `${position}%` }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={beforeSrc} alt="Sketch" className="absolute inset-0 w-full h-full object-cover bg-white" style={{ minWidth: containerRef.current?.offsetWidth ?? 0 }} draggable={false} />
+      </div>
+
+      {/* Divider line */}
+      <div
+        className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_8px_rgba(0,0,0,0.6)]"
+        style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+      >
+        {/* Handle */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white shadow-lg flex items-center justify-center">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M5 8L2 5M5 8L2 11M5 8H1" stroke="#333" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M11 8L14 5M11 8L14 11M11 8H15" stroke="#333" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      </div>
+
+      {/* Labels */}
+      <div className="absolute top-2 left-2 bg-black/50 text-white text-[10px] font-semibold px-2 py-1 rounded-md pointer-events-none">
+        SKETCH
+      </div>
+      <div className="absolute top-2 right-2 bg-indigo-600/80 text-white text-[10px] font-semibold px-2 py-1 rounded-md pointer-events-none">
+        RENDER
+      </div>
+    </div>
+  );
+}
+
 
 const STYLE_SUGGESTIONS = [
   'photorealistic, dramatic lighting, 4K',
@@ -298,6 +377,7 @@ export default function SketchToRender() {
   const [activeResult, setActiveResult] = useState<RenderResult | null>(null);
   const [error, setError] = useState('');
   const [progress, setProgress] = useState(0); // 0..uploadedImages.length when rendering multi
+  const [showComparison, setShowComparison] = useState(false); // before/after slider toggle
 
   const hasInput = inputMode === 'draw' ? !!sketchDataUrl : uploadedImages.length > 0;
   const isMulti = inputMode === 'upload' && uploadedImages.length > 1;
@@ -326,6 +406,7 @@ export default function SketchToRender() {
     setMergeResult(null);
     setActiveResult(null);
     setProgress(0);
+    setShowComparison(false);
 
     try {
       if (inputMode === 'draw') {
@@ -521,12 +602,27 @@ export default function SketchToRender() {
               <h2 className="text-xs text-white/40 uppercase tracking-widest font-semibold">
                 {activeResult?.sourceIndex === -1 ? 'Merged Render' : 'Result'}
               </h2>
-              {activeResult && (
-                <a href={activeResult.url} target="_blank" rel="noopener noreferrer" download="render.jpg"
-                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-                  ⬇ Download
-                </a>
-              )}
+              <div className="flex items-center gap-3">
+                {/* Before/After toggle — only when we have result AND a sketch/image to compare */}
+                {activeResult && (sketchDataUrl || uploadedImages.length > 0) && (
+                  <button
+                    onClick={() => setShowComparison(v => !v)}
+                    className={`text-xs font-medium px-2.5 py-1 rounded-lg transition-all border ${
+                      showComparison
+                        ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300'
+                        : 'border-white/10 text-white/40 hover:border-white/30 hover:text-white/70'
+                    }`}
+                  >
+                    ↔ Before / After
+                  </button>
+                )}
+                {activeResult && (
+                  <a href={activeResult.url} target="_blank" rel="noopener noreferrer" download="render.jpg"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                    ⬇ Download
+                  </a>
+                )}
+              </div>
             </div>
 
             {(loading || mergeLoading) && !activeResult ? (
@@ -539,20 +635,33 @@ export default function SketchToRender() {
               </div>
             ) : activeResult ? (
               <div className="flex-1 flex flex-col gap-3">
-                <div className="relative rounded-xl overflow-hidden flex-1">
-                  <Image src={activeResult.url} alt="AI Render" width={1280} height={800}
-                    className="w-full h-full object-cover rounded-xl" unoptimized priority />
-                  {activeResult.sourceIndex !== undefined && activeResult.sourceIndex >= 0 && (
-                    <div className="absolute top-2 left-2 bg-black/60 text-white text-xs rounded-lg px-2 py-1">
-                      Image #{activeResult.sourceIndex + 1}
-                    </div>
-                  )}
-                  {activeResult.sourceIndex === -1 && (
-                    <div className="absolute top-2 left-2 bg-violet-600/80 text-white text-xs rounded-lg px-2 py-1 font-medium">
-                      🔀 Merged
-                    </div>
-                  )}
-                </div>
+                {showComparison && (sketchDataUrl || uploadedImages.length > 0) ? (
+                  /* Before/After slider mode */
+                  <BeforeAfterSlider
+                    beforeSrc={
+                      inputMode === 'draw'
+                        ? (sketchDataUrl ?? '')
+                        : (uploadedImages[activeResult.sourceIndex ?? 0] ?? uploadedImages[0])
+                    }
+                    afterSrc={activeResult.url}
+                  />
+                ) : (
+                  /* Normal render view */
+                  <div className="relative rounded-xl overflow-hidden flex-1">
+                    <Image src={activeResult.url} alt="AI Render" width={1280} height={800}
+                      className="w-full h-full object-cover rounded-xl" unoptimized priority />
+                    {activeResult.sourceIndex !== undefined && activeResult.sourceIndex >= 0 && (
+                      <div className="absolute top-2 left-2 bg-black/60 text-white text-xs rounded-lg px-2 py-1">
+                        Image #{activeResult.sourceIndex + 1}
+                      </div>
+                    )}
+                    {activeResult.sourceIndex === -1 && (
+                      <div className="absolute top-2 left-2 bg-violet-600/80 text-white text-xs rounded-lg px-2 py-1 font-medium">
+                        🔀 Merged
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex-1 flex items-center justify-center">
