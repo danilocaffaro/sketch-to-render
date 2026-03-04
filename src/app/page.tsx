@@ -64,7 +64,7 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: BeforeAfterSliderProps) {
       {/* Before (sketch) — clipped to left side */}
       <div className="absolute inset-0 overflow-hidden" style={{ width: `${position}%` }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={beforeSrc} alt="Sketch" className="absolute inset-0 w-full h-full object-cover bg-white" style={{ minWidth: containerRef.current?.offsetWidth ?? 0 }} draggable={false} />
+        <img src={beforeSrc} alt="Sketch" className="absolute inset-0 bg-white" style={{ width: containerRef.current?.offsetWidth ?? '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
       </div>
 
       {/* Divider line */}
