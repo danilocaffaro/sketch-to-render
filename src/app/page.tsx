@@ -748,8 +748,9 @@ export default function SketchToRender() {
                 ) : (
                   /* Normal render view */
                   <div className="relative rounded-xl overflow-hidden flex-1">
-                    <Image src={activeResult.url} alt="AI Render" width={1280} height={800}
-                      className="w-full h-full object-cover rounded-xl" unoptimized priority />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={activeResult.url} alt="AI Render"
+                      className="w-full h-full object-cover rounded-xl" />
                     {activeResult.perspectiveAngle && (
                       <div className="absolute top-2 left-2 bg-amber-600/80 text-white text-xs rounded-lg px-2 py-1 font-medium">
                         {PERSPECTIVE_LABELS[activeResult.perspectiveAngle] ?? activeResult.perspectiveAngle}
@@ -794,7 +795,7 @@ export default function SketchToRender() {
                         : 'border-white/10 hover:border-white/30'
                     }`}>
                     <Image src={r.url} alt={`Render ${i + 1}`} width={400} height={250}
-                      className="w-full h-full object-cover" unoptimized />
+                      className="w-full h-full object-cover" unoptimized={r.url.startsWith('data:')} />
                     <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5">
                       {r.perspectiveAngle ? (PERSPECTIVE_LABELS[r.perspectiveAngle] ?? r.perspectiveAngle) : `#${(r.sourceIndex ?? i) + 1}`}
                     </div>
@@ -808,7 +809,7 @@ export default function SketchToRender() {
                         : 'border-white/10 hover:border-white/30'
                     }`}>
                     <Image src={mergeResult.url} alt="Merged render" width={400} height={250}
-                      className="w-full h-full object-cover" unoptimized />
+                      className="w-full h-full object-cover" unoptimized={mergeResult.url.startsWith('data:')} />
                     <div className="absolute bottom-1 right-1 bg-violet-600/80 text-white text-[10px] rounded px-1.5 py-0.5 font-medium">
                       🔀 merge
                     </div>

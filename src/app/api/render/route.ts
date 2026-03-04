@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fal } from "@fal-ai/client";
-
-// Server-side only — FAL_KEY never exposed to client
-fal.config({ credentials: process.env.FAL_KEY });
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // ─── Perspective angles for multi-perspective mode ────────────────────────────
 
@@ -36,61 +33,64 @@ export interface RenderRequest {
 /**
  * Build a geometry-first prompt that preserves the input image's viewpoint,
  * angle, proportions, and spatial relationships.
- * The style hint is appended only if provided — default stays faithful to input.
- * additionalContext is appended at the end for extra adjustments.
  */
-function buildPrompt(styleHint?: string, mergeMode?: boolean, additionalContext?: string, floorPlanMode?: boolean, perspectiveAngle?: PerspectiveAngleId): string {
+function buildPrompt(
+  styleHint?: string,
+  mergeMode?: boolean,
+  additionalContext?: string,
+  floorPlanMode?: boolean,
+  perspectiveAngle?: PerspectiveAngleId
+): string {
   let base: string;
 
   if (floorPlanMode) {
     base = [
-      "humanized architectural floor plan render, top-down bird's eye view,",
-      "fully furnished with realistic furniture, rugs, plants, and decor,",
-      "people silhouettes for scale, natural warm interior lighting,",
-      "polished wood floors, contemporary interior design,",
-      "photorealistic overhead view, high detail finishes,",
-      "professional real estate marketing visualization,",
+      "Generate a photorealistic humanized architectural floor plan render, top-down bird's eye view.",
+      "Fully furnished with realistic furniture, rugs, plants, and decor.",
+      "Include people silhouettes for scale, natural warm interior lighting.",
+      "Polished wood floors, contemporary interior design.",
+      "Professional real estate marketing visualization, high detail finishes.",
     ].join(" ");
   } else if (mergeMode) {
     base = [
-      "architectural 3D render integrating multiple reference images,",
-      "preserving consistent viewpoint and spatial layout,",
-      "seamless composition blending all input geometries,",
-      "same perspective angle as reference images,",
-      "faithful proportions and structural details,",
-      "professional architectural visualization,",
+      "Generate a photorealistic architectural 3D render integrating all provided reference sketches.",
+      "Preserve consistent viewpoint and spatial layout.",
+      "Create a seamless composition blending all input geometries.",
+      "Faithful proportions and structural details.",
+      "Professional architectural visualization.",
     ].join(" ");
   } else {
     const angleSuffix = perspectiveAngle
-      ? PERSPECTIVE_ANGLES.find(a => a.id === perspectiveAngle)?.suffix ?? ""
+      ? PERSPECTIVE_ANGLES.find((a) => a.id === perspectiveAngle)?.suffix ?? ""
       : "";
 
     base = [
-      "photorealistic architectural 3D render,",
-      angleSuffix || "exact same viewpoint and camera angle as the input image,",
-      "faithful to the input geometry and spatial proportions,",
-      "preserving all structural details walls windows doors rooflines,",
-      perspectiveAngle ? "" : "matching perspective and depth as shown in sketch,",
-      "professional architectural visualization, ultra-detailed, 4K,",
-    ].filter(Boolean).join(" ");
+      "Generate a photorealistic architectural 3D render from this sketch.",
+      angleSuffix
+        ? `Use a ${angleSuffix}.`
+        : "Keep the exact same viewpoint and camera angle as the input sketch.",
+      "Remain faithful to the input geometry, proportions, walls, windows, doors, and rooflines.",
+      "Professional architectural visualization, ultra-detailed, 4K quality.",
+    ].join(" ");
   }
 
   const stylePart = styleHint?.trim()
-    ? `, ${styleHint.trim()}`
+    ? ` Style: ${styleHint.trim()}.`
     : floorPlanMode
-      ? ", bright airy atmosphere, Scandinavian minimal style, soft shadows"
-      : ", natural daylight, realistic materials, clean architectural photography";
+    ? " Bright airy atmosphere, Scandinavian minimal style, soft shadows."
+    : " Natural daylight, realistic materials, clean architectural photography.";
 
   const contextPart = additionalContext?.trim()
-    ? `, ${additionalContext.trim()}`
+    ? ` Additional instructions: ${additionalContext.trim()}.`
     : "";
 
   return base + stylePart + contextPart;
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.FAL_KEY) {
-    return NextResponse.json({ error: "FAL_KEY not configured" }, { status: 500 });
+  const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "GOOGLE_API_KEY not configured" }, { status: 500 });
   }
 
   let body: RenderRequest;
@@ -100,7 +100,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { sketchDataUrl, additionalImages = [], styleHint, additionalContext, mergeMode = false, floorPlanMode = false, perspectiveAngle, seed } = body;
+  const {
+    sketchDataUrl,
+    additionalImages = [],
+    styleHint,
+    additionalContext,
+    mergeMode = false,
+    floorPlanMode = false,
+    perspectiveAngle,
+  } = body;
 
   if (!sketchDataUrl) {
     return NextResponse.json({ error: "Missing sketchDataUrl" }, { status: 400 });
@@ -116,91 +124,75 @@ export async function POST(req: NextRequest) {
   const fullPrompt = buildPrompt(styleHint, mergeMode, additionalContext, floorPlanMode, perspectiveAngle);
 
   try {
-    // Upload primary sketch to fal storage
-    const sketchBlob = await dataUrlToBlob(sketchDataUrl);
-    const uploadedUrl = await fal.storage.upload(sketchBlob);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash-preview-image-generation",
+    });
 
-    // For merge mode, upload additional images too
-    const additionalUrls: string[] = [];
+    // Build parts array: prompt + sketch + optional extra images
+    const imageParts: Array<{ inlineData: { data: string; mimeType: string } }> = [];
+
+    // Primary sketch
+    const [primaryHeader, primaryBase64] = sketchDataUrl.split(",");
+    const primaryMime = primaryHeader.match(/:(.*?);/)?.[1] ?? "image/png";
+    imageParts.push({ inlineData: { data: primaryBase64, mimeType: primaryMime } });
+
+    // Extra images for merge mode
     if (mergeMode && additionalImages.length > 0) {
       for (const img of additionalImages.slice(0, 3)) {
-        // limit to 3 extra for perf
         if (img.startsWith("data:image/")) {
-          const blob = await dataUrlToBlob(img);
-          additionalUrls.push(await fal.storage.upload(blob));
+          const [hdr, b64] = img.split(",");
+          const mime = hdr.match(/:(.*?);/)?.[1] ?? "image/png";
+          imageParts.push({ inlineData: { data: b64, mimeType: mime } });
         }
       }
     }
 
-    // ControlNet conditioning scale:
-    // - floor plan: 0.55 (more creative freedom for humanization)
-    // - merge: 0.75 (needs to integrate multiple sources)
-    // - default: 0.70 (geometry-faithful)
-    const conditioningScale = floorPlanMode ? 0.55 : mergeMode ? 0.75 : 0.70;
+    const result = await model.generateContent([
+      fullPrompt,
+      ...imageParts,
+    ]);
 
-    const controls: Array<{
-      control_image_url: string;
-      control_mode: "canny";
-      conditioning_scale: number;
-    }> = [
-      {
-        control_image_url: uploadedUrl,
-        control_mode: "canny",
-        conditioning_scale: conditioningScale,
-      },
-      // In merge mode, add extra images as additional canny controls with lower weight
-      ...additionalUrls.map((url) => ({
-        control_image_url: url,
-        control_mode: "canny" as const,
-        conditioning_scale: 0.30,
-      })),
-    ];
+    const response = result.response;
+    const candidates = response.candidates ?? [];
 
-    const input = {
-      prompt: fullPrompt,
-      // floor plan: square_hd (plans are typically square); default: landscape_16_9
-      image_size: floorPlanMode ? ("square_hd" as const) : ("landscape_16_9" as const),
-      num_inference_steps: 28,
-      guidance_scale: floorPlanMode ? 4.5 : 3.5, // higher guidance for floor plan detail
-      num_images: 1,
-      enable_safety_checker: true,
-      // seed: fixes style/palette consistency across multi-perspective renders
-      ...(seed !== undefined && { seed }),
-      controlnet_unions: [
-        {
-          path: "alimama-creative/FLUX.1-dev-Controlnet-Union-Pro",
-          controls,
-        },
-      ],
-    };
+    // Find the generated image part
+    let imageBase64: string | null = null;
+    let imageMimeType = "image/png";
 
-    const result = await fal.subscribe("fal-ai/flux-general", { input });
+    for (const candidate of candidates) {
+      for (const part of candidate.content?.parts ?? []) {
+        if (part.inlineData?.mimeType?.startsWith("image/")) {
+          imageBase64 = part.inlineData.data;
+          imageMimeType = part.inlineData.mimeType;
+          break;
+        }
+      }
+      if (imageBase64) break;
+    }
 
-    const images = result.data?.images;
-    if (!images || images.length === 0) {
+    if (!imageBase64) {
+      // Log response for debugging
+      console.error("[render] Gemini response — no image part found:", JSON.stringify(response).slice(0, 500));
       return NextResponse.json(
-        { error: "No images returned from fal.ai" },
+        { error: "No image returned from Gemini" },
         { status: 502 }
       );
     }
 
+    // Return as data URL so the frontend can display it directly
+    const dataUrl = `data:${imageMimeType};base64,${imageBase64}`;
+
     return NextResponse.json({
-      url: images[0].url,
+      url: dataUrl,
       prompt: fullPrompt,
-      requestId: result.requestId,
+      requestId: null,
       perspectiveAngle: perspectiveAngle ?? null,
-      seed: seed ?? null,
+      seed: null,
     });
   } catch (err: unknown) {
-    console.error("[render] fal.ai error:", err);
+    console.error("[render] Gemini error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: `Render failed: ${message}` }, { status: 502 });
   }
-}
-
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const [header, base64] = dataUrl.split(",");
-  const mime = header.match(/:(.*?);/)?.[1] ?? "image/png";
-  const binary = Buffer.from(base64, "base64");
-  return new Blob([binary], { type: mime });
 }
