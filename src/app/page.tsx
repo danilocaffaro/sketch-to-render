@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import Image from 'next/image';
+// next/image removed — data URLs not supported; using native <img> throughout
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -340,8 +340,9 @@ function MultiUpload({ images, onAdd, onRemove, floorPlanMode = false }: MultiUp
         <div className="grid grid-cols-3 gap-2">
           {images.map((img, i) => (
             <div key={i} className="relative rounded-xl overflow-hidden border border-white/10 aspect-video bg-white">
-              <Image src={img} alt={`Input ${i + 1}`} width={400} height={250}
-                className="w-full h-full object-contain" unoptimized />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img} alt={`Input ${i + 1}`}
+                className="w-full h-full object-contain" />
               <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5 font-mono">
                 #{i + 1}
               </div>
