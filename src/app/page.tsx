@@ -319,7 +319,23 @@ function MultiUpload({ images, onAdd, onRemove, floorPlanMode = false }: MultiUp
     if (!isImage) return;
     try {
       const reader = new FileReader();
-      reader.onload = (e) => onAdd(e.target?.result as string);
+      reader.onload = (e) => {
+        const raw = e.target?.result as string;
+        // Normalize to image/jpeg via canvas — fixes HEIC/HEIF and other exotic MIME types
+        // that Gemini API rejects ("string did not match the expected pattern")
+        const img = new window.Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { onAdd(raw); return; }
+          ctx.drawImage(img, 0, 0);
+          onAdd(canvas.toDataURL('image/jpeg', 0.92));
+        };
+        img.onerror = () => onAdd(raw); // fallback: pass raw if canvas decode fails
+        img.src = raw;
+      };
       reader.onerror = () => console.error('Failed to read file:', file.name);
       reader.readAsDataURL(file);
     } catch (err) {
