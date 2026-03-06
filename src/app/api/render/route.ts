@@ -65,11 +65,12 @@ function buildPrompt(
       : "";
 
     base = [
-      "Generate a photorealistic architectural 3D render from this sketch.",
+      "Use the provided sketch as the strict structural blueprint — do not invent, alter, or simplify any geometry.",
+      "Every wall segment, opening (window/door), roofline, and spatial relationship must be preserved exactly as drawn.",
+      "Generate a photorealistic architectural 3D render that is a direct visual translation of this sketch.",
       angleSuffix
         ? `Use a ${angleSuffix}.`
         : "Keep the exact same viewpoint and camera angle as the input sketch.",
-      "Remain faithful to the input geometry, proportions, walls, windows, doors, and rooflines.",
       "Professional architectural visualization, ultra-detailed, 4K quality.",
     ].join(" ");
   }
